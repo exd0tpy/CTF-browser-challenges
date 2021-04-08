@@ -1,2 +1,3 @@
-# CTF-browser-challenges
+# 🔥 CTF-browser-challenges 🔥
+
 Collection of browser challenges
