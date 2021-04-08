@@ -1,0 +1,5 @@
+[picoCTF 2021 Dowload Horsepower]
+
+description : Gotta go fast d8 source.tar.gz server.py Connect at mercury.picoctf.net 24306
+solves : 58
+
