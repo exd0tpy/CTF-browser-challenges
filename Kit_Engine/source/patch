@@ -1,0 +1,141 @@
+diff --git a/src/d8/d8.cc b/src/d8/d8.cc
+index e6fb20d152..35195b9261 100644
+--- a/src/d8/d8.cc
++++ b/src/d8/d8.cc
+@@ -979,6 +979,53 @@ struct ModuleResolutionData {
+ 
+ }  // namespace
+ 
++uint64_t doubleToUint64_t(double d){
++  union {
++    double d;
++    uint64_t u;
++  } conv = { .d = d };
++  return conv.u;
++}
++
++void Shell::Breakpoint(const v8::FunctionCallbackInfo<v8::Value>& args) {
++  __asm__("int3");
++}
++
++void Shell::AssembleEngine(const v8::FunctionCallbackInfo<v8::Value>& args) {
++  Isolate* isolate = args.GetIsolate();
++  if(args.Length() != 1) {
++    return;
++  }
++
++  double *func = (double *)mmap(NULL, 4096, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
++  if (func == (double *)-1) {
++    printf("Unable to allocate memory. Contact admin\n");
++    return;
++  }
++
++  if (args[0]->IsArray()) {
++    Local<Array> arr = args[0].As<Array>();
++
++    Local<Value> element;
++    for (uint32_t i = 0; i < arr->Length(); i++) {
++      if (arr->Get(isolate->GetCurrentContext(), i).ToLocal(&element) && element->IsNumber()) {
++        Local<Number> val = element.As<Number>();
++        func[i] = val->Value();
++      }
++    }
++
++    printf("Memory Dump. Watch your endianness!!:\n");
++    for (uint32_t i = 0; i < arr->Length(); i++) {
++      printf("%d: float %f hex %lx\n", i, func[i], doubleToUint64_t(func[i]));
++    }
++
++    printf("Starting your engine!!\n");
++    void (*foo)() = (void(*)())func;
++    foo();
++  }
++  printf("Done\n");
++}
++
+ void Shell::ModuleResolutionSuccessCallback(
+     const FunctionCallbackInfo<Value>& info) {
+   std::unique_ptr<ModuleResolutionData> module_resolution_data(
+@@ -2201,40 +2248,15 @@ Local<String> Shell::Stringify(Isolate* isolate, Local<Value> value) {
+ 
+ Local<ObjectTemplate> Shell::CreateGlobalTemplate(Isolate* isolate) {
+   Local<ObjectTemplate> global_template = ObjectTemplate::New(isolate);
+-  global_template->Set(Symbol::GetToStringTag(isolate),
+-                       String::NewFromUtf8Literal(isolate, "global"));
++  // Add challenge builtin, and remove some unintented solutions
++  global_template->Set(isolate, "AssembleEngine", FunctionTemplate::New(isolate, AssembleEngine));
++  global_template->Set(isolate, "Breakpoint", FunctionTemplate::New(isolate, Breakpoint));
+   global_template->Set(isolate, "version",
+                        FunctionTemplate::New(isolate, Version));
+-
+   global_template->Set(isolate, "print", FunctionTemplate::New(isolate, Print));
+-  global_template->Set(isolate, "printErr",
+-                       FunctionTemplate::New(isolate, PrintErr));
+-  global_template->Set(isolate, "write", FunctionTemplate::New(isolate, Write));
+-  global_template->Set(isolate, "read", FunctionTemplate::New(isolate, Read));
+-  global_template->Set(isolate, "readbuffer",
+-                       FunctionTemplate::New(isolate, ReadBuffer));
+-  global_template->Set(isolate, "readline",
+-                       FunctionTemplate::New(isolate, ReadLine));
+-  global_template->Set(isolate, "load", FunctionTemplate::New(isolate, Load));
+-  global_template->Set(isolate, "setTimeout",
+-                       FunctionTemplate::New(isolate, SetTimeout));
+-  // Some Emscripten-generated code tries to call 'quit', which in turn would
+-  // call C's exit(). This would lead to memory leaks, because there is no way
+-  // we can terminate cleanly then, so we need a way to hide 'quit'.
+   if (!options.omit_quit) {
+     global_template->Set(isolate, "quit", FunctionTemplate::New(isolate, Quit));
+   }
+-  global_template->Set(isolate, "testRunner",
+-                       Shell::CreateTestRunnerTemplate(isolate));
+-  global_template->Set(isolate, "Realm", Shell::CreateRealmTemplate(isolate));
+-  global_template->Set(isolate, "performance",
+-                       Shell::CreatePerformanceTemplate(isolate));
+-  global_template->Set(isolate, "Worker", Shell::CreateWorkerTemplate(isolate));
+-  // Prevent fuzzers from creating side effects.
+-  if (!i::FLAG_fuzzing) {
+-    global_template->Set(isolate, "os", Shell::CreateOSTemplate(isolate));
+-  }
+-  global_template->Set(isolate, "d8", Shell::CreateD8Template(isolate));
+ 
+ #ifdef V8_FUZZILLI
+   global_template->Set(
+@@ -2243,11 +2265,6 @@ Local<ObjectTemplate> Shell::CreateGlobalTemplate(Isolate* isolate) {
+       FunctionTemplate::New(isolate, Fuzzilli), PropertyAttribute::DontEnum);
+ #endif  // V8_FUZZILLI
+ 
+-  if (i::FLAG_expose_async_hooks) {
+-    global_template->Set(isolate, "async_hooks",
+-                         Shell::CreateAsyncHookTemplate(isolate));
+-  }
+-
+   return global_template;
+ }
+ 
+@@ -2449,10 +2466,10 @@ void Shell::Initialize(Isolate* isolate, D8Console* console,
+             v8::Isolate::kMessageLog);
+   }
+ 
+-  isolate->SetHostImportModuleDynamicallyCallback(
++  /*isolate->SetHostImportModuleDynamicallyCallback(
+       Shell::HostImportModuleDynamically);
+   isolate->SetHostInitializeImportMetaObjectCallback(
+-      Shell::HostInitializeImportMetaObject);
++      Shell::HostInitializeImportMetaObject);*/
+ 
+ #ifdef V8_FUZZILLI
+   // Let the parent process (Fuzzilli) know we are ready.
+diff --git a/src/d8/d8.h b/src/d8/d8.h
+index a6a1037cff..4591d27f65 100644
+--- a/src/d8/d8.h
++++ b/src/d8/d8.h
+@@ -413,6 +413,9 @@ class Shell : public i::AllStatic {
+     kNoProcessMessageQueue = false
+   };
+ 
++  static void AssembleEngine(const v8::FunctionCallbackInfo<v8::Value>& args);
++  static void Breakpoint(const v8::FunctionCallbackInfo<v8::Value>& args);
++
+   static bool ExecuteString(Isolate* isolate, Local<String> source,
+                             Local<Value> name, PrintResult print_result,
+                             ReportExceptions report_exceptions,
