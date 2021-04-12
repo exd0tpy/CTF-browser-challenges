@@ -1,0 +1,2 @@
+v8.debug.tar.gz filter=lfs diff=lfs merge=lfs -text
+v8.release.tar.gz filter=lfs diff=lfs merge=lfs -text
