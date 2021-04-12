@@ -1,0 +1,322 @@
+diff --git a/src/execution/stack-guard.cc b/src/execution/stack-guard.cc
+index a98fb07c93..447be61b95 100644
+--- a/src/execution/stack-guard.cc
++++ b/src/execution/stack-guard.cc
+@@ -280,6 +280,11 @@ Object StackGuard::HandleInterrupts() {
+     BackingStore::UpdateSharedWasmMemoryObjects(isolate_);
+   }
+ 
++  if (TestAndClear(&interrupt_flags, SHRINK_SHARED_MEMORY)) {
++    TRACE_EVENT0("v8.wasm", "V8.WasmShrinkSharedMemory");
++    BackingStore::UpdateSharedWasmMemoryObjects(isolate_);
++  }
++
+   if (TestAndClear(&interrupt_flags, DEOPT_MARKED_ALLOCATION_SITES)) {
+     TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("v8.gc"),
+                  "V8.GCDeoptMarkedAllocationSites");
+diff --git a/src/execution/stack-guard.h b/src/execution/stack-guard.h
+index b445158557..15e83a878f 100644
+--- a/src/execution/stack-guard.h
++++ b/src/execution/stack-guard.h
+@@ -49,7 +49,8 @@ class V8_EXPORT_PRIVATE StackGuard final {
+   V(DEOPT_MARKED_ALLOCATION_SITES, DeoptMarkedAllocationSites, 4) \
+   V(GROW_SHARED_MEMORY, GrowSharedMemory, 5)                      \
+   V(LOG_WASM_CODE, LogWasmCode, 6)                                \
+-  V(WASM_CODE_GC, WasmCodeGC, 7)
++  V(WASM_CODE_GC, WasmCodeGC, 7)                                  \
++  V(SHRINK_SHARED_MEMORY, ShrinkSharedMemory, 8)
+ 
+ #define V(NAME, Name, id)                                    \
+   inline bool Check##Name() { return CheckInterrupt(NAME); } \
+diff --git a/src/flags/flag-definitions.h b/src/flags/flag-definitions.h
+index ab689283e9..4dfc6f4703 100644
+--- a/src/flags/flag-definitions.h
++++ b/src/flags/flag-definitions.h
+@@ -879,6 +879,8 @@ DEFINE_BOOL(wasm_atomics_on_non_shared_memory, true,
+             "allow atomic operations on non-shared WebAssembly memory")
+ DEFINE_BOOL(wasm_grow_shared_memory, true,
+             "allow growing shared WebAssembly memory objects")
++DEFINE_BOOL(wasm_shrink_shared_memory, true,
++            "allow shrinking shared WebAssembly memory objects")
+ DEFINE_BOOL(wasm_simd_post_mvp, false,
+             "allow experimental SIMD operations for prototyping that are not "
+             "included in the current proposal")
+diff --git a/src/objects/backing-store.cc b/src/objects/backing-store.cc
+index c67fff0fa9..a2a277a77b 100644
+--- a/src/objects/backing-store.cc
++++ b/src/objects/backing-store.cc
+@@ -474,6 +474,30 @@ std::unique_ptr<BackingStore> BackingStore::CopyWasmMemory(Isolate* isolate,
+   return new_backing_store;
+ }
+ 
++std::unique_ptr<BackingStore> BackingStore::CopyWasmMemoryOnShrink(Isolate* isolate,
++                                                           size_t new_size) {
++
++  if (is_wasm_memory_) {
++    BackingStore::ShrinkWasmMemoryInPlace(isolate, this->byte_length() - new_size);
++    auto new_backing_store = BackingStore::Allocate(
++        isolate, new_size,
++        is_shared() ? SharedFlag::kShared : SharedFlag::kNotShared,
++        InitializedFlag::kUninitialized);
++    if (!new_backing_store) {
++      return {};
++    }
++
++    return new_backing_store;
++  } else {
++    bool result = BackingStore::Reallocate(isolate, new_size);
++    if (!result) {
++      return {};
++    }
++  }
++
++  return std::unique_ptr<BackingStore>(this);
++}
++
+ // Try to grow the size of a wasm memory in place, without realloc + copy.
+ base::Optional<size_t> BackingStore::GrowWasmMemoryInPlace(Isolate* isolate,
+                                                            size_t delta_pages,
+@@ -548,6 +572,28 @@ base::Optional<size_t> BackingStore::GrowWasmMemoryInPlace(Isolate* isolate,
+   return {old_length / wasm::kWasmPageSize};
+ }
+ 
++// Try to shrink the size of a wasm memory in place, without realloc + copy.
++base::Optional<size_t> BackingStore::ShrinkWasmMemoryInPlace(Isolate* isolate,
++                                                           size_t delta_bytes) {
++
++  size_t old_length = byte_length_.load(std::memory_order_relaxed);
++  size_t new_length = 0;
++  while (true) {
++
++    new_length = old_length - delta_bytes;
++    if (byte_length_.compare_exchange_weak(old_length, new_length,
++                                           std::memory_order_acq_rel)) {
++      break;
++    }
++  }
++
++  if (!is_shared_ && free_on_destruct_) {
++    reinterpret_cast<v8::Isolate*>(isolate)
++        ->AdjustAmountOfExternalAllocatedMemory(new_length - old_length);
++  }
++  return {old_length};
++}
++
+ void BackingStore::AttachSharedWasmMemoryObject(
+     Isolate* isolate, Handle<WasmMemoryObject> memory_object) {
+   DCHECK(is_wasm_memory_);
+@@ -563,6 +609,12 @@ void BackingStore::BroadcastSharedWasmMemoryGrow(
+                                                             backing_store);
+ }
+ 
++void BackingStore::BroadcastSharedWasmMemoryShrink(
++    Isolate* isolate, std::shared_ptr<BackingStore> backing_store) {
++  GlobalBackingStoreRegistry::BroadcastSharedWasmMemoryShrink(isolate,
++                                                            backing_store);
++}
++
+ void BackingStore::RemoveSharedWasmMemoryObjects(Isolate* isolate) {
+   GlobalBackingStoreRegistry::Purge(isolate);
+ }
+@@ -794,6 +846,21 @@ void GlobalBackingStoreRegistry::BroadcastSharedWasmMemoryGrow(
+   UpdateSharedWasmMemoryObjects(isolate);
+ }
+ 
++void GlobalBackingStoreRegistry::BroadcastSharedWasmMemoryShrink(
++    Isolate* isolate, std::shared_ptr<BackingStore> backing_store) {
++  {
++    base::MutexGuard scope_lock(&impl()->mutex_);
++    SharedWasmMemoryData* shared_data =
++        backing_store->get_shared_wasm_memory_data();
++    for (Isolate* other : shared_data->isolates_) {
++      if (other && other != isolate) {
++        other->stack_guard()->RequestShrinkSharedMemory();
++      }
++    }
++  }
++  UpdateSharedWasmMemoryObjects(isolate);
++}
++
+ void GlobalBackingStoreRegistry::UpdateSharedWasmMemoryObjects(
+     Isolate* isolate) {
+   HandleScope scope(isolate);
+diff --git a/src/objects/backing-store.h b/src/objects/backing-store.h
+index 0a460cef8a..984f68305b 100644
+--- a/src/objects/backing-store.h
++++ b/src/objects/backing-store.h
+@@ -89,6 +89,10 @@ class V8_EXPORT_PRIVATE BackingStore : public BackingStoreBase {
+                                                size_t delta_pages,
+                                                size_t max_pages);
+ 
++  // Attempt to shrink this backing store in place.
++  base::Optional<size_t> ShrinkWasmMemoryInPlace(Isolate* isolate,
++                                               size_t delta_bytes);
++
+   // Wrapper around ArrayBuffer::Allocator::Reallocate.
+   bool Reallocate(Isolate* isolate, size_t new_byte_length);
+ 
+@@ -97,6 +101,9 @@ class V8_EXPORT_PRIVATE BackingStore : public BackingStoreBase {
+   std::unique_ptr<BackingStore> CopyWasmMemory(Isolate* isolate,
+                                                size_t new_pages);
+ 
++  std::unique_ptr<BackingStore> CopyWasmMemoryOnShrink(Isolate* isolate,
++                                               size_t new_size);
++
+   // Attach the given memory object to this backing store. The memory object
+   // will be updated if this backing store is grown.
+   void AttachSharedWasmMemoryObject(Isolate* isolate,
+@@ -108,6 +115,13 @@ class V8_EXPORT_PRIVATE BackingStore : public BackingStoreBase {
+   static void BroadcastSharedWasmMemoryGrow(Isolate* isolate,
+                                             std::shared_ptr<BackingStore>);
+ 
++  // Send asynchronous updates to attached memory objects in other isolates
++  // after the backing store has been grown. Memory objects in this
++  // isolate are updated synchronously.
++  static void BroadcastSharedWasmMemoryShrink(Isolate* isolate,
++                                            std::shared_ptr<BackingStore>);
++
++
+   // TODO(wasm): address space limitations should be enforced in page alloc.
+   // These methods enforce a limit on the total amount of address space,
+   // which is used for both backing stores and wasm memory.
+@@ -246,6 +260,10 @@ class GlobalBackingStoreRegistry {
+   static void BroadcastSharedWasmMemoryGrow(
+       Isolate* isolate, std::shared_ptr<BackingStore> backing_store);
+ 
++// Broadcast updates to all attached memory objects.
++  static void BroadcastSharedWasmMemoryShrink(
++      Isolate* isolate, std::shared_ptr<BackingStore> backing_store);
++
+   // Update all shared memory objects in the given isolate.
+   static void UpdateSharedWasmMemoryObjects(Isolate* isolate);
+ };
+diff --git a/src/objects/js-array-buffer.cc b/src/objects/js-array-buffer.cc
+index c480e77041..3072d8df22 100644
+--- a/src/objects/js-array-buffer.cc
++++ b/src/objects/js-array-buffer.cc
+@@ -87,7 +87,7 @@ void JSArrayBuffer::Detach(bool force_for_wasm_memory) {
+   if (backing_store()) {
+     std::shared_ptr<BackingStore> backing_store;
+       backing_store = RemoveExtension();
+-    CHECK_IMPLIES(force_for_wasm_memory, backing_store->is_wasm_memory());
++    // CHECK_IMPLIES(force_for_wasm_memory, backing_store->is_wasm_memory());
+   }
+ 
+   if (Protectors::IsArrayBufferDetachingIntact(isolate)) {
+diff --git a/src/wasm/wasm-js.cc b/src/wasm/wasm-js.cc
+index 16f4c5d3f9..eb82030646 100644
+--- a/src/wasm/wasm-js.cc
++++ b/src/wasm/wasm-js.cc
+@@ -1753,6 +1753,30 @@ void WebAssemblyMemoryGrow(const v8::FunctionCallbackInfo<v8::Value>& args) {
+   return_value.Set(ret);
+ }
+ 
++// WebAssembly.Memory.shrink(num) -> num
++void WebAssemblyMemoryShrink(const v8::FunctionCallbackInfo<v8::Value>& args) {
++  v8::Isolate* isolate = args.GetIsolate();
++  i::Isolate* i_isolate = reinterpret_cast<i::Isolate*>(isolate);
++  HandleScope scope(isolate);
++  ScheduledErrorThrower thrower(i_isolate, "WebAssembly.Memory.shrink()");
++  Local<Context> context = isolate->GetCurrentContext();
++  EXTRACT_THIS(receiver, WasmMemoryObject);
++
++  uint32_t delta_size;
++  if (!EnforceUint32("Argument 0", args[0], context, &thrower, &delta_size)) {
++    return;
++  }
++
++  int32_t ret = i::WasmMemoryObject::Shrink(i_isolate, receiver, delta_size);
++  if (ret == -1) {
++    thrower.RangeError("Unable to shrink instance memory.");
++    return;
++  }
++
++  v8::ReturnValue<v8::Value> return_value = args.GetReturnValue();
++  return_value.Set(ret);
++}
++
+ // WebAssembly.Memory.buffer -> ArrayBuffer
+ void WebAssemblyMemoryGetBuffer(
+     const v8::FunctionCallbackInfo<v8::Value>& args) {
+@@ -2194,6 +2218,7 @@ void WasmJs::Install(Isolate* isolate, bool exposed_on_global_object) {
+       i::WASM_MEMORY_OBJECT_TYPE, WasmMemoryObject::kHeaderSize);
+   JSFunction::SetInitialMap(memory_constructor, memory_map, memory_proto);
+   InstallFunc(isolate, memory_proto, "grow", WebAssemblyMemoryGrow, 1);
++  InstallFunc(isolate, memory_proto, "shrink", WebAssemblyMemoryShrink, 1);
+   InstallGetter(isolate, memory_proto, "buffer", WebAssemblyMemoryGetBuffer);
+   if (enabled_features.has_type_reflection()) {
+     InstallFunc(isolate, memory_constructor, "type", WebAssemblyMemoryType, 1);
+diff --git a/src/wasm/wasm-objects.cc b/src/wasm/wasm-objects.cc
+index cf78ab5ff3..8171bc4cc4 100644
+--- a/src/wasm/wasm-objects.cc
++++ b/src/wasm/wasm-objects.cc
+@@ -988,6 +988,55 @@ int32_t WasmMemoryObject::Grow(Isolate* isolate,
+   return static_cast<int32_t>(old_pages);  // success
+ }
+ 
++// static
++int32_t WasmMemoryObject::Shrink(Isolate* isolate,
++                               Handle<WasmMemoryObject> memory_object,
++                               uint32_t bytes) {
++  TRACE_EVENT0("v8.wasm", "wasm.ShrinkMemory");
++  Handle<JSArrayBuffer> old_buffer(memory_object->array_buffer(), isolate);
++  // Any buffer used as an asmjs memory cannot be detached, and
++  // therefore this memory cannot be shrunk.
++  if (old_buffer->is_asmjs_memory()) return -1;
++  size_t old_size = old_buffer->byte_length();
++
++  std::shared_ptr<BackingStore> backing_store = old_buffer->GetBackingStore();
++  if (!backing_store) return -1;
++  // Try to handle shared memory first.
++  if (old_buffer->is_shared()) {
++    if (FLAG_wasm_shrink_shared_memory) {
++      base::Optional<size_t> result =
++          backing_store->ShrinkWasmMemoryInPlace(isolate, bytes);
++      // Shared memories can only be shrunk in place; no copying.
++      if (result.has_value()) {
++        BackingStore::BroadcastSharedWasmMemoryShrink(isolate, backing_store);
++        // Broadcasting the update should update this memory object too.
++        CHECK_NE(*old_buffer, memory_object->array_buffer());
++        return static_cast<int32_t>(result.value());
++      }
++    }
++    return -1;
++  }
++
++  size_t new_size = old_size - bytes;
++  // Try allocating a new backing store and copying.
++  std::unique_ptr<BackingStore> new_backing_store =
++      backing_store->CopyWasmMemoryOnShrink(isolate, new_size);
++  if (!new_backing_store) {
++    // Crash on out-of-memory if the correctness fuzzer is running.
++    if (FLAG_correctness_fuzzer_suppressions) {
++      FATAL("could not shrink wasm memory");
++    }
++    return -1;
++  }
++
++  Handle<JSArrayBuffer> new_buffer =
++      isolate->factory()->NewJSArrayBuffer(std::move(new_backing_store));
++
++  memory_object->update_instances(isolate, new_buffer);
++
++  return static_cast<int32_t>(old_size);  // success
++}
++
+ // static
+ MaybeHandle<WasmGlobalObject> WasmGlobalObject::New(
+     Isolate* isolate, Handle<WasmInstanceObject> instance,
+diff --git a/src/wasm/wasm-objects.h b/src/wasm/wasm-objects.h
+index d269c8df4f..30932c75e8 100644
+--- a/src/wasm/wasm-objects.h
++++ b/src/wasm/wasm-objects.h
+@@ -321,6 +321,9 @@ class WasmMemoryObject : public JSObject {
+   V8_EXPORT_PRIVATE static int32_t Grow(Isolate*, Handle<WasmMemoryObject>,
+                                         uint32_t pages);
+ 
++  V8_EXPORT_PRIVATE static int32_t Shrink(Isolate*, Handle<WasmMemoryObject>,
++                                        uint32_t bytes);
++
+   OBJECT_CONSTRUCTORS(WasmMemoryObject, JSObject);
+ };
+ 

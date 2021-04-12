@@ -1,0 +1,9 @@
+make view with memory.buffer
+and shrink some byte.
+than memory.buffer will reallocate and free previous one.
+but we have view. so we can access that chunk.
+so make chunk size to 0x70 (shrink(65536-0x60)) and free (shrink(1) etc..).
+make view with freed pointer(view = new DataView(memory.buffer)).
+access freed chunk with view.
+so overwrite fd and make another 0x70 chunk, we can allocate chunk averyware.
+attack __free_hook or __malloc_hook.
