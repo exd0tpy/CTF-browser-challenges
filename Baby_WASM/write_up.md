@@ -80,5 +80,21 @@ index c67fff0fa9..a2a277a77b 100644
 `CopyWasmMemoryOnShrink` allocates `BackingStore`.  
 According to [src/objects/backing-store.cc](https://github.com/v8/v8/blob/3a407f7b2b7e6d2c451f79048590b788dae19972/src/objects/backing-store.cc#L212) BackingStore::Allocate's 4th argument is `InitializedFlag`
 
-Our patch is using kUninitialized flag.
+Our patch is using kUninitialized flag.  
+So allocated memory can contain main arena's address.  
 
+```javascript
+memory.shrink(1); //insert 0x70 chunk to tcache 
+var b = memory.buffer;
+var view = new DataView(b);
+memory.shrink(1); //get 0x70 chunk from tcache and insert previous chunk
+```
+After shrink, free `BackingStore`.  
+but we can set and get with pre-defined `view`.  
+(ex. we can access freed chunk with `view.getFloat64` and `view.setFloat64`)  
+So it leads to UAF.
+
+We leak libc address with uninitialized chunk data.  
+After leak libc, corrupt tcache fd pointer with `__free_hook` or some other hook area.  
+Allocate chunk with `memory.shrink(0x10000-0x60)` and overwrite `hook` area!.  
+Pwn!  
