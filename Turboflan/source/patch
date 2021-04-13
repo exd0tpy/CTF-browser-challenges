@@ -1,0 +1,126 @@
+diff --git a/src/compiler/effect-control-linearizer.cc b/src/compiler/effect-control-linearizer.cc
+index d64c3c80e5..6bbd1e98b0 100644
+--- a/src/compiler/effect-control-linearizer.cc
++++ b/src/compiler/effect-control-linearizer.cc
+@@ -1866,8 +1866,9 @@ void EffectControlLinearizer::LowerCheckMaps(Node* node, Node* frame_state) {
+       Node* map = __ HeapConstant(maps[i]);
+       Node* check = __ TaggedEqual(value_map, map);
+       if (i == map_count - 1) {
+-        __ DeoptimizeIfNot(DeoptimizeReason::kWrongMap, p.feedback(), check,
+-                           frame_state, IsSafetyCheck::kCriticalSafetyCheck);
++        // This makes me slow down! Can't have! Gotta go fast!!
++        // __ DeoptimizeIfNot(DeoptimizeReason::kWrongMap, p.feedback(), check,
++        //                     frame_state, IsSafetyCheck::kCriticalSafetyCheck);
+       } else {
+         auto next_map = __ MakeLabel();
+         __ BranchWithCriticalSafetyCheck(check, &done, &next_map);
+@@ -1888,8 +1889,8 @@ void EffectControlLinearizer::LowerCheckMaps(Node* node, Node* frame_state) {
+       Node* check = __ TaggedEqual(value_map, map);
+ 
+       if (i == map_count - 1) {
+-        __ DeoptimizeIfNot(DeoptimizeReason::kWrongMap, p.feedback(), check,
+-                           frame_state, IsSafetyCheck::kCriticalSafetyCheck);
++        // __ DeoptimizeIfNot(DeoptimizeReason::kWrongMap, p.feedback(), check,
++        //                     frame_state, IsSafetyCheck::kCriticalSafetyCheck);
+       } else {
+         auto next_map = __ MakeLabel();
+         __ BranchWithCriticalSafetyCheck(check, &done, &next_map);
+diff --git a/src/d8/d8.cc b/src/d8/d8.cc
+index 999e8c2b96..72b729d94e 100644
+--- a/src/d8/d8.cc
++++ b/src/d8/d8.cc
+@@ -1107,6 +1107,11 @@ void Shell::ModuleResolutionSuccessCallback(
+   resolver->Resolve(realm, module_namespace).ToChecked();
+ }
+ 
++void Shell::Breakpoint(const v8::FunctionCallbackInfo<v8::Value>& args) {
++  __asm__("int3");
++}
++
++
+ void Shell::ModuleResolutionFailureCallback(
+     const FunctionCallbackInfo<Value>& info) {
+   std::unique_ptr<ModuleResolutionData> module_resolution_data(
+@@ -2425,40 +2430,12 @@ Local<String> Shell::Stringify(Isolate* isolate, Local<Value> value) {
+ 
+ Local<ObjectTemplate> Shell::CreateGlobalTemplate(Isolate* isolate) {
+   Local<ObjectTemplate> global_template = ObjectTemplate::New(isolate);
+-  global_template->Set(Symbol::GetToStringTag(isolate),
+-                       String::NewFromUtf8Literal(isolate, "global"));
++  // Remove some unintented solutions
+   global_template->Set(isolate, "version",
+                        FunctionTemplate::New(isolate, Version));
++  global_template->Set(isolate, "Breakpoint", FunctionTemplate::New(isolate, Breakpoint));
+ 
+   global_template->Set(isolate, "print", FunctionTemplate::New(isolate, Print));
+-  global_template->Set(isolate, "printErr",
+-                       FunctionTemplate::New(isolate, PrintErr));
+-  global_template->Set(isolate, "write", FunctionTemplate::New(isolate, Write));
+-  global_template->Set(isolate, "read", FunctionTemplate::New(isolate, Read));
+-  global_template->Set(isolate, "readbuffer",
+-                       FunctionTemplate::New(isolate, ReadBuffer));
+-  global_template->Set(isolate, "readline",
+-                       FunctionTemplate::New(isolate, ReadLine));
+-  global_template->Set(isolate, "load", FunctionTemplate::New(isolate, Load));
+-  global_template->Set(isolate, "setTimeout",
+-                       FunctionTemplate::New(isolate, SetTimeout));
+-  // Some Emscripten-generated code tries to call 'quit', which in turn would
+-  // call C's exit(). This would lead to memory leaks, because there is no way
+-  // we can terminate cleanly then, so we need a way to hide 'quit'.
+-  if (!options.omit_quit) {
+-    global_template->Set(isolate, "quit", FunctionTemplate::New(isolate, Quit));
+-  }
+-  global_template->Set(isolate, "testRunner",
+-                       Shell::CreateTestRunnerTemplate(isolate));
+-  global_template->Set(isolate, "Realm", Shell::CreateRealmTemplate(isolate));
+-  global_template->Set(isolate, "performance",
+-                       Shell::CreatePerformanceTemplate(isolate));
+-  global_template->Set(isolate, "Worker", Shell::CreateWorkerTemplate(isolate));
+-  // Prevent fuzzers from creating side effects.
+-  if (!i::FLAG_fuzzing) {
+-    global_template->Set(isolate, "os", Shell::CreateOSTemplate(isolate));
+-  }
+-  global_template->Set(isolate, "d8", Shell::CreateD8Template(isolate));
+ 
+ #ifdef V8_FUZZILLI
+   global_template->Set(
+@@ -2467,11 +2444,6 @@ Local<ObjectTemplate> Shell::CreateGlobalTemplate(Isolate* isolate) {
+       FunctionTemplate::New(isolate, Fuzzilli), PropertyAttribute::DontEnum);
+ #endif  // V8_FUZZILLI
+ 
+-  if (i::FLAG_expose_async_hooks) {
+-    global_template->Set(isolate, "async_hooks",
+-                         Shell::CreateAsyncHookTemplate(isolate));
+-  }
+-
+   return global_template;
+ }
+ 
+@@ -2673,10 +2645,10 @@ void Shell::Initialize(Isolate* isolate, D8Console* console,
+             v8::Isolate::kMessageLog);
+   }
+ 
+-  isolate->SetHostImportModuleDynamicallyCallback(
+-      Shell::HostImportModuleDynamically);
+-  isolate->SetHostInitializeImportMetaObjectCallback(
+-      Shell::HostInitializeImportMetaObject);
++  // isolate->SetHostImportModuleDynamicallyCallback(
++  //     Shell::HostImportModuleDynamically);
++  // isolate->SetHostInitializeImportMetaObjectCallback(
++  //     Shell::HostInitializeImportMetaObject);
+ 
+ #ifdef V8_FUZZILLI
+   // Let the parent process (Fuzzilli) know we are ready.
+diff --git a/src/d8/d8.h b/src/d8/d8.h
+index a9f6f3bc8b..2513761fa6 100644
+--- a/src/d8/d8.h
++++ b/src/d8/d8.h
+@@ -415,6 +415,8 @@ class Shell : public i::AllStatic {
+     kNoProcessMessageQueue = false
+   };
+ 
++  static void Breakpoint(const v8::FunctionCallbackInfo<v8::Value>& args);
++
+   static bool ExecuteString(Isolate* isolate, Local<String> source,
+                             Local<Value> name, PrintResult print_result,
+                             ReportExceptions report_exceptions,
