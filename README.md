@@ -2,7 +2,7 @@
 
 > Collection of browser challenges
 
-|Challenge|CTF|difficulty|
+|Challenge|CTF|Difficulty|
 |------|-----|---|
 |[Baby WASM](https://github.com/exd0tpy/CTF-browser-challenges/tree/main/Baby_WASM)|RITSEC CTF 2021|⭐|
 |[Kit Engine](https://github.com/exd0tpy/CTF-browser-challenges/tree/main/Kit_Engine)|picoCTF 2021|⭐|
