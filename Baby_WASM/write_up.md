@@ -1,5 +1,9 @@
 # Baby WASM
 
+### Note
+> This challenge has unintened solution.  
+Using `read`, `import` and using 1-day `CVE-2020-16040`.   
+Actually this write up is same as Teen WASM.
 
 ### description
 >This is a JS engine pwn challenge.  
