@@ -11,3 +11,7 @@
 |[Teen WASM](https://github.com/exd0tpy/CTF-browser-challenges/tree/main/Teen_WASM)|RITSEC CTF 2021|⭐⭐⭐|
 |[babychrome](https://github.com/exd0tpy/CTF-browser-challenges/tree/main/babychrome)|LINE CTF 2021|⭐⭐⭐|
 
+## Download d8 binary
+Using `download_d8.sh` shellscript to download `d8` because `d8` is big binary. (usally over 100MB)  
+
+
