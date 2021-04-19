@@ -6,6 +6,7 @@
 |------|-----|---|
 |[Baby WASM](https://github.com/exd0tpy/CTF-browser-challenges/tree/main/Baby_WASM)|RITSEC CTF 2021|⭐|
 |[Kit Engine](https://github.com/exd0tpy/CTF-browser-challenges/tree/main/Kit_Engine)|picoCTF 2021|⭐|
+|[oob-v8](https://github.com/exd0tpy/CTF-browser-challenges/tree/main/oob-v8)|*CTF 2019|⭐|
 |[Download Horsepower](https://github.com/exd0tpy/CTF-browser-challenges/tree/main/Download_Horsepower)|picoCTF 2021|⭐⭐|
 |[Turboflan](https://github.com/exd0tpy/CTF-browser-challenges/tree/main/Turboflan)|picoCTF 2021|⭐⭐|
 |[Teen WASM](https://github.com/exd0tpy/CTF-browser-challenges/tree/main/Teen_WASM)|RITSEC CTF 2021|⭐⭐⭐|
