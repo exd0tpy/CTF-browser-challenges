@@ -1,4 +1,3 @@
-// WORKING...
 var buf = new ArrayBuffer(8); 
 var f64_buf = new Float64Array(buf);
 var u64_buf = new Uint32Array(buf);
