@@ -9,3 +9,5 @@ wget --load-cookies cookies.txt -O $filename \
 	     'https://docs.google.com/uc?export=download&id='$fileid'&confirm='$(<confirm.txt)
 
 rm -f confirm.txt cookies.txt
+
+chmod +x d8
