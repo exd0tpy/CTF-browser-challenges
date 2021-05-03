@@ -27,8 +27,6 @@ function setValue(target, value, offset){
 	var idx = 0;
 	var num = 1;	
 	while(val != 0){
-		//nsole.log(val);
-		//nsole.log(val % 0xffn);
 		num = Number(val%0xffn);
 		target[offset + idx] = num;
 		idx ++;
